@@ -53,7 +53,7 @@ jobs:
     await client.add('revertBatch', {shopId: '123'});
 
     expect(Queue).toHaveBeenCalled();
-    const queueCall = Queue.mock.calls.find(c => c[0] === 'worker:medium');
+    const queueCall = Queue.mock.calls.find(c => c[0] === 'worker-medium');
     expect(queueCall).toBeTruthy();
 
     expect(mockAdd).toHaveBeenCalledWith(
@@ -110,7 +110,7 @@ jobs:
     await client.add('revertBatch', {a: 1});
     await client.add('revertBatch', {a: 2});
 
-    const mediumCalls = Queue.mock.calls.filter(c => c[0] === 'worker:medium');
+    const mediumCalls = Queue.mock.calls.filter(c => c[0] === 'worker-medium');
     expect(mediumCalls.length).toBe(1);
   });
 });

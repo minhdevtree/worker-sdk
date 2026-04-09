@@ -28,21 +28,21 @@ describe('TierManager', () => {
 
     const calls = Worker.mock.calls;
     const queueNames = calls.map(c => c[0]);
-    expect(queueNames).toContain('worker:heavy');
-    expect(queueNames).toContain('worker:medium');
-    expect(queueNames).toContain('worker:light');
+    expect(queueNames).toContain('worker-heavy');
+    expect(queueNames).toContain('worker-medium');
+    expect(queueNames).toContain('worker-light');
 
-    const heavyCall = calls.find(c => c[0] === 'worker:heavy');
+    const heavyCall = calls.find(c => c[0] === 'worker-heavy');
     expect(heavyCall[2].concurrency).toBe(2);
 
-    const lightCall = calls.find(c => c[0] === 'worker:light');
+    const lightCall = calls.find(c => c[0] === 'worker-light');
     expect(lightCall[2].concurrency).toBe(10);
   });
 
   it('should return queue name for a given tier', () => {
-    expect(TierManager.queueName('heavy')).toBe('worker:heavy');
-    expect(TierManager.queueName('medium')).toBe('worker:medium');
-    expect(TierManager.queueName('light')).toBe('worker:light');
+    expect(TierManager.queueName('heavy')).toBe('worker-heavy');
+    expect(TierManager.queueName('medium')).toBe('worker-medium');
+    expect(TierManager.queueName('light')).toBe('worker-light');
   });
 
   it('should close all workers on shutdown', async () => {

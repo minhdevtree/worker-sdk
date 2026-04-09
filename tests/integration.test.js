@@ -106,11 +106,11 @@ jobs:
     await client.add('sendEmail', {to: 'test@example.com'});
 
     expect(addedJobs.length).toBe(2);
-    expect(addedJobs[0].queue).toBe('worker:heavy');
+    expect(addedJobs[0].queue).toBe('worker-heavy');
     expect(addedJobs[0].jobName).toBe('processOrder');
     expect(addedJobs[0].data).toEqual({orderId: 42});
 
-    expect(addedJobs[1].queue).toBe('worker:light');
+    expect(addedJobs[1].queue).toBe('worker-light');
     expect(addedJobs[1].jobName).toBe('sendEmail');
 
     await client.close();

@@ -17,7 +17,7 @@ export class TierManager {
   }
 
   static queueName(tier) {
-    return `${QUEUE_PREFIX}:${tier}`;
+    return `${QUEUE_PREFIX}-${tier}`;
   }
 
   async closeAll() {
