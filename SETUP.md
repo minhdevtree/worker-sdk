@@ -1,31 +1,32 @@
-# @minhdevtree/worker-sdk — Setup Guide
+# @minhdevtree/worker-sdk — Integration Guide
 
-Step-by-step guide to integrate the worker SDK into any app.
+Step-by-step guide to integrate the worker SDK into any Node.js app.
 
 ## Prerequisites
 
 - Node.js >= 20
-- Redis running (local or remote)
-- App uses Babel with module aliases (e.g., `@functions/`)
+- A Redis instance you can reach (local or remote)
 
-## Step 1: Install the SDK
+## Step 1: Install
 
 ```bash
-# In your app's package directory
 yarn add @minhdevtree/worker-sdk
 
-# If your app uses Babel aliases and you want to import handlers from src/
+# Optional — only if your app uses Babel module aliases (e.g. @yourapp/...)
+# and you want to import handlers directly from src/ instead of compiled lib/
 yarn add --dev @babel/register
 ```
 
-## Step 2: Create worker config
+## Step 2: Create the worker config
 
 Create `worker.config.yml` in your app's package root (next to `package.json`):
 
 ```yaml
 redis:
-  host: 127.0.0.1
-  port: 6379
+  host: ${REDIS_HOST:-127.0.0.1}
+  port: ${REDIS_PORT:-6379}
+  password: ${REDIS_PASSWORD:-}
+  tls: ${REDIS_TLS:-}
 
 dashboard:
   port: 3800
@@ -39,7 +40,6 @@ concurrency:
   light: 10   # Quick tasks
 
 jobs:
-  # Each job needs a name, tier, and timeout
   myJob:
     tier: medium
     timeout: 540000       # 9 minutes in ms
@@ -47,16 +47,17 @@ jobs:
       maxAttempts: 3
       baseDelay: 5000     # exponential backoff starting at 5s
 
-  # Cron jobs have a cron field
   dailyCleanup:
     tier: light
     timeout: 30000
-    cron: "0 2 * * *"     # every day at 2 AM
+    cron: "0 2 * * *"     # cron field marks this as a scheduled job
 ```
+
+**Env interpolation:** `${VAR}` and `${VAR:-default}` syntax let you use the same file across local and production. Set `REDIS_TLS=true` to enable TLS for the Redis connection.
 
 ## Step 3: Create job handlers
 
-Create a directory structure for your handlers:
+Suggested directory structure:
 
 ```
 src/jobs/
@@ -127,7 +128,7 @@ export function register(worker) {
 }
 ```
 
-## Step 4: Create worker entry point
+## Step 4: Create the worker entry point
 
 Create `worker.mjs` in your app's package root:
 
@@ -139,29 +140,18 @@ import {fileURLToPath} from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Register Babel so we can import directly from src/ with aliases
-// (skip this if your app doesn't use Babel)
+// Optional: register Babel so we can import directly from src/ with module aliases
+// (skip if your app doesn't use Babel)
 const require = createRequire(import.meta.url);
 require('@babel/register');
 
-// ─── Database init (pick what your app uses) ───
-//
-// Firebase/Firestore:
+// Your app's database/SDK initialization goes here.
+// Example: Firebase Admin
 //   import firebase from 'firebase-admin';
-//   const projectId = process.env.GCLOUD_PROJECT || 'your-project-id';
-//   if (firebase.apps.length === 0) {
-//     firebase.initializeApp({projectId, credential: firebase.credential.applicationDefault()});
-//   }
+//   firebase.initializeApp({...});
 //
-// PostgreSQL (if your app doesn't auto-connect on import):
-//   import {Pool} from 'pg';
-//   global.pgPool = new Pool({connectionString: process.env.DATABASE_URL});
-//
-// MongoDB (if your app doesn't auto-connect on import):
-//   import mongoose from 'mongoose';
-//   await mongoose.connect(process.env.MONGODB_URI);
-//
-// If your repositories handle their own connections, skip this entirely.
+// The SDK does not assume any specific database. Initialize whatever
+// your handlers need before importing them.
 
 // Create worker
 const worker = createWorker(path.resolve(__dirname, 'worker.config.yml'));
@@ -176,9 +166,9 @@ registerCron(worker);
 await worker.start();
 ```
 
-## Step 5: Create client helper
+## Step 5: Create the client helper
 
-Create a client module that your app backend uses to dispatch jobs:
+The client lets your app backend dispatch jobs into the queue:
 
 ```js
 // src/helpers/worker/workerClient.js
@@ -203,6 +193,7 @@ async function getWorkerClient() {
  *
  * @param {string} jobName - must match a job in worker.config.yml
  * @param {object} payload - job data
+ * @returns {Promise<{id: string}>} — id has the format `${jobName}-${uuid}`
  */
 export async function dispatchJob(jobName, payload) {
   const client = await getWorkerClient();
@@ -210,77 +201,69 @@ export async function dispatchJob(jobName, payload) {
 }
 ```
 
-## Step 6: Add npm script
+The dynamic `import()` is needed if your app is compiled to CJS by Babel. If your app is native ESM, you can use a regular `import` statement.
 
-Add to your `package.json` scripts:
+## Step 6: Add an npm script
 
 ```json
 {
   "scripts": {
-    "worker": "GCLOUD_PROJECT=your-project-id GOOGLE_APPLICATION_CREDENTIALS=$HOME/.config/firebase/your-credentials.json WORKER_DASHBOARD_PASSWORD=yourpassword node worker.mjs"
+    "worker": "node worker.mjs"
   }
 }
 ```
 
+For env vars (like `WORKER_DASHBOARD_PASSWORD`, Redis credentials, app secrets), either:
+- Add them to your shell profile or `.env` file
+- Pass them inline: `WORKER_DASHBOARD_PASSWORD=secret npm run worker`
+
 ## Step 7: Dispatch jobs from your app
 
-Replace `publishTopic()` calls with `dispatchJob()`:
+Replace direct queue producers (e.g. Firebase `publishTopic()`) with `dispatchJob()`:
 
 ```js
-// Before (Firebase Pub/Sub)
-import publishTopic from '@yourapp/helpers/pubsub/publishTopic';
-await publishTopic('myJob', {shopId, data});
-
-// After (Worker SDK)
 import {dispatchJob} from '@yourapp/helpers/worker/workerClient';
+
 await dispatchJob('myJob', {shopId, data});
 ```
 
 ## Running
 
-### Start Redis
+### 1. Make sure Redis is reachable
+
+The SDK doesn't manage Redis — you need a Redis instance running and reachable at the host/port you configured. Local install, Docker, managed cloud Redis, anything works.
+
+### 2. Start the worker
 
 ```bash
-redis-server
-```
-
-### Start the worker
-
-```bash
-cd your-app/packages/functions
 npm run worker
 ```
 
 You should see:
 
 ```
-[worker] Firebase initialized with project: your-project-id
 [worker-sdk] Worker started
 [worker-sdk] Jobs: myJob, anotherJob, dailyCleanup
 [worker-sdk] Tiers: {"heavy":2,"medium":5,"light":10}
 [worker-sdk] Dashboard running on port 3800
 ```
 
-### Open Bull Board dashboard
+### 3. Open Bull Board dashboard
 
 Go to `http://localhost:3800` and log in with the credentials from your config.
 
 You can see:
 - All queues (heavy/medium/light) with job counts
-- Job list with status filtering
+- Job list filtered by status
 - Job detail — payload, result, logs, errors
 - Retry/delete failed jobs
 - Cron schedules
 
-### Start your app (separate terminal)
+### 4. Start your app (in a separate terminal)
 
-```bash
-yarn dev
-```
+The app and worker share the Redis connection. The app dispatches jobs, the worker processes them.
 
-Both the worker and app connect to the same Redis. The app pushes jobs, the worker processes them.
-
-## Migrating Firebase Pub/Sub handlers
+## Migrating from Firebase Pub/Sub
 
 ### Before (Firebase)
 
@@ -313,12 +296,11 @@ jobs:
 ```js
 // src/jobs/functions/myJob.js
 export async function execute(payload, context) {
-  const {shopId} = payload;          // already parsed
+  const {shopId} = payload;          // already parsed, plain object
   context.logger.info('Processing', {shopId});
   // ... same business logic
 
-  // If handler calls publishTopic() internally to chain jobs,
-  // replace with dispatchJob():
+  // If the handler chains other jobs, replace publishTopic with dispatchJob:
   // Before: await publishTopic('nextJob', {shopId, data});
   // After:  await dispatchJob('nextJob', {shopId, data});
 }
@@ -331,9 +313,10 @@ export async function execute(payload, context) {
 | `functions.runWith({memory, timeout})` | `worker.config.yml` (tier, timeout, retry) |
 | `.pubsub.topic('name').onPublish(fn)` | `worker.register('name', execute)` |
 | `JSON.parse(Buffer.from(message.data))` | `payload` (already parsed) |
-| `console.log()` | Works as-is (auto-captured to Bull Board) |
+| `console.log()` | Works as-is — auto-captured to Bull Board |
 | `publishTopic('next', data)` | `dispatchJob('next', data)` |
-| Runs on Google Cloud | Runs on your machine |
+| Numeric job IDs (1, 2, 3) | `jobName-uuid` format |
+| Runs on Google Cloud | Runs wherever you run the worker process |
 
 ### What stays the same
 
@@ -341,32 +324,34 @@ export async function execute(payload, context) {
 - All imports (repositories, services, APIs)
 - All database access (Firestore, PostgreSQL, MongoDB, etc.)
 - `console.log/warn/error` (auto-captured)
-- File can stay in the same location
+- Handler files can stay in their existing location
 
 ## Environment variables
 
 | Variable | Required | Description |
 |---|---|---|
 | `WORKER_DASHBOARD_PASSWORD` | Yes | Bull Board dashboard password |
-| `GCLOUD_PROJECT` | Firebase only | Firebase project ID (needed by Firestore) |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Firebase only | Path to Firebase credentials JSON |
-| `DATABASE_URL` | PostgreSQL only | PostgreSQL connection string |
-| `MONGODB_URI` | MongoDB only | MongoDB connection string |
+| `REDIS_HOST` | No | Override YAML default |
+| `REDIS_PORT` | No | Override YAML default |
+| `REDIS_PASSWORD` | No | Override YAML default |
+| `REDIS_TLS` | No | Set to `true` to enable TLS for Redis |
+
+Any field in `worker.config.yml` can be made env-driven via `${VAR_NAME}` or `${VAR_NAME:-default}` syntax.
 
 ## Directory structure (complete)
 
 ```
-your-app/packages/functions/
+your-app/
 ├── worker.mjs                    # Worker entry point
 ├── worker.config.yml             # Job definitions + Redis config
 ├── src/
 │   ├── jobs/
 │   │   ├── functions/
-│   │   │   ├── index.js          # Register all function handlers
+│   │   │   ├── index.js          # Registers all function handlers
 │   │   │   ├── myJob.js
 │   │   │   └── anotherJob.js
 │   │   └── cron/
-│   │       ├── index.js          # Register all cron handlers
+│   │       ├── index.js          # Registers all cron handlers
 │   │       └── dailyCleanup.js
 │   └── helpers/
 │       └── worker/

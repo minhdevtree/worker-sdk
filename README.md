@@ -2,13 +2,24 @@
 
 Self-hosted background job runner powered by BullMQ + Redis. Replace Firebase Cloud Functions with a simple, local job queue.
 
+## Features
+
+- **Tier-based concurrency** — heavy/medium/light queues with configurable limits
+- **Cron jobs** — first-class scheduled job support via BullMQ repeatable jobs
+- **Bull Board dashboard** — built-in web UI for inspecting jobs, retries, errors
+- **TLS Redis support** — connect to remote Redis over TLS (production-ready)
+- **Env-driven config** — single YAML works across local dev and production
+- **Console capture** — `console.log/warn/error` inside handlers automatically appears in Bull Board
+- **Readable job IDs** — `{jobName}-{uuid}` format
+- **Graceful shutdown** — drains in-flight jobs on SIGTERM/SIGINT
+
 ## Install
 
 ```bash
 npm install @minhdevtree/worker-sdk
 ```
 
-Requires Redis running locally or remotely.
+Requires Node.js >= 20 and a Redis instance you can reach.
 
 ## Quick Start
 
@@ -18,14 +29,16 @@ Requires Redis running locally or remotely.
 
 ```yaml
 redis:
-  host: 127.0.0.1
-  port: 6379
+  host: ${REDIS_HOST:-127.0.0.1}
+  port: ${REDIS_PORT:-6379}
+  password: ${REDIS_PASSWORD:-}
+  tls: ${REDIS_TLS:-}
 
 dashboard:
   port: 3800
   auth:
     username: admin
-    password: ${DASHBOARD_PASSWORD}
+    password: ${WORKER_DASHBOARD_PASSWORD}
 
 concurrency:
   heavy: 2
@@ -39,14 +52,18 @@ jobs:
     retry:
       maxAttempts: 3
       baseDelay: 2000
+
   sendNotification:
     tier: light
     timeout: 10000
+
   dailyReport:
     tier: medium
     timeout: 300000
     cron: "0 0 * * *"
 ```
+
+YAML supports `${VAR}` and `${VAR:-default}` env interpolation. The same file can run locally (defaults to `127.0.0.1`) or in production (override via env vars).
 
 ### 2. Define handlers
 
@@ -54,16 +71,21 @@ jobs:
 // jobs/processOrder.js
 export async function execute(payload, context) {
   const {logger, signal, jobId, attempt} = context;
+
   logger.info('Processing order', {orderId: payload.orderId});
-  const result = await processOrder(payload.orderId);
-  return result;
+
+  // console.log/warn/error inside this function (and any code it calls)
+  // is automatically captured to Bull Board logs
+  console.log('Doing some work...');
+
+  return {success: true};
 }
 ```
 
 ### 3. Start worker
 
 ```js
-// worker.js
+// worker.mjs
 import {createWorker} from '@minhdevtree/worker-sdk';
 import {execute as processOrder} from './jobs/processOrder.js';
 import {execute as sendNotification} from './jobs/sendNotification.js';
@@ -78,6 +100,8 @@ worker.register('dailyReport', dailyReport);
 await worker.start();
 ```
 
+Run it: `node worker.mjs`
+
 ### 4. Push jobs from your app
 
 ```js
@@ -86,30 +110,88 @@ import {createClient} from '@minhdevtree/worker-sdk';
 const client = createClient('./worker.config.yml');
 
 await client.add('processOrder', {orderId: 42});
-await client.add('sendNotification', {to: 'user@example.com'});
+// → returns {id: "processOrder-e7a3b5c2-3a4f-..."}
 ```
+
+The client is lightweight — only creates BullMQ Queue instances on demand. Safe to import anywhere in your app backend.
 
 ## Tiers
 
-Jobs are grouped by resource weight:
+Jobs are grouped by resource weight. Each tier maps to a separate BullMQ Worker with its own concurrency limit:
 
 | Tier | Default Concurrency | Use case |
 |------|-------------------|----------|
-| heavy | 2 | CPU/memory intensive work |
-| medium | 5 | Moderate processing |
-| light | 10 | Quick tasks |
+| heavy | 2 | CPU/memory intensive work — bulk API calls, image processing |
+| medium | 5 | Moderate processing — page scanning, batch operations |
+| light | 10 | Quick tasks — status updates, notifications |
+
+Override defaults in `worker.config.yml`:
+
+```yaml
+concurrency:
+  heavy: 3
+  medium: 10
+  light: 20
+```
 
 ## Dashboard
 
-Bull Board UI available at `http://localhost:3800` (configurable). View queues, job status, retry failed jobs, inspect payloads.
+Bull Board UI mounted at `http://localhost:3800` (port configurable). Features:
+
+- View all queues with job counts
+- Filter jobs by status (completed/failed/waiting/active/delayed)
+- Inspect payload, result, logs, error/stack trace
+- Retry/delete/promote individual jobs
+- View repeatable cron schedules
+
+Basic auth is required — set `username` and `password` in config.
 
 ## Handler Context
 
 ```js
 export async function execute(payload, context) {
-  context.jobId    // unique job ID
-  context.attempt  // current attempt (1-based)
-  context.logger   // {info, warn, error} — logs visible in Bull Board
-  context.signal   // AbortSignal — fires on timeout
+  context.jobId    // unique job ID — format: jobName-uuid
+  context.attempt  // current attempt number (1-based)
+  context.logger   // {info, warn, error} — writes to Bull Board + stdout
+  context.signal   // AbortSignal — fires when timeout expires
 }
 ```
+
+## Cron Jobs
+
+Add a `cron` field to any job in the config. The SDK registers it as a BullMQ repeatable job — schedule survives restarts.
+
+```yaml
+jobs:
+  dailyReport:
+    tier: medium
+    timeout: 300000
+    cron: "0 0 * * *"        # every day at midnight
+```
+
+The handler is registered like any other job — same `execute(payload, context)` signature.
+
+## Env Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `WORKER_DASHBOARD_PASSWORD` | Yes | Bull Board dashboard password |
+| `REDIS_HOST` | No | Defaults to YAML config |
+| `REDIS_PORT` | No | Defaults to YAML config |
+| `REDIS_PASSWORD` | No | Defaults to YAML config |
+| `REDIS_TLS` | No | Set to `true` to enable TLS |
+
+Any field in `worker.config.yml` can be made env-driven via `${VAR_NAME:-default}` syntax.
+
+## Migration from Firebase Pub/Sub
+
+| Before (Firebase) | After (Worker SDK) |
+|---|---|
+| `functions.runWith({memory, timeout})` | `worker.config.yml` job entry |
+| `.pubsub.topic('name').onPublish(fn)` | `worker.register('name', execute)` |
+| `JSON.parse(Buffer.from(message.data))` | `payload` (already parsed) |
+| `console.log()` | Works as-is — captured to Bull Board |
+| `publishTopic('next', data)` | `client.add('next', data)` |
+| Runs on Google Cloud | Runs on your machine |
+
+See `SETUP.md` for the full integration guide with handler structure, file layout, and migration steps.
