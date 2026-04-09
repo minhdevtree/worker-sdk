@@ -24,17 +24,33 @@ export function loadConfig(configPath) {
 
 /**
  * Normalize Redis connection options after env interpolation.
+ * - Strip empty/null fields (when env var is unset, YAML parses ${VAR:-} as null)
  * - Coerce port from string to number (env vars are always strings)
- * - Convert tls: "true" to {} (enables TLS); empty/false removes the key
+ * - Convert tls: "true" to {} (enables TLS); empty/null/false removes the key
  */
 function normalizeRedisOptions(redis) {
   if (!redis) return;
+
+  // Drop empty/null fields so they don't override ioredis defaults
+  for (const key of Object.keys(redis)) {
+    if (key === 'tls') continue; // tls is handled below
+    if (redis[key] === null || redis[key] === '' || redis[key] === undefined) {
+      delete redis[key];
+    }
+  }
 
   if (typeof redis.port === 'string') {
     redis.port = parseInt(redis.port, 10);
   }
 
-  if (redis.tls === undefined || redis.tls === '' || redis.tls === 'false' || redis.tls === false) {
+  // Empty/null/false → no TLS
+  if (
+    redis.tls === undefined ||
+    redis.tls === null ||
+    redis.tls === '' ||
+    redis.tls === 'false' ||
+    redis.tls === false
+  ) {
     delete redis.tls;
   } else if (redis.tls === 'true' || redis.tls === true) {
     redis.tls = {};
