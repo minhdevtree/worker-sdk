@@ -35,6 +35,11 @@ export function createWorker(configPath) {
         throw new Error(`Registered handlers not defined in config: ${unconfigured.join(', ')}`);
       }
 
+      // Clean up Redis options — remove empty password
+      const cleanRedis = {...config.redis};
+      if (!cleanRedis.password) delete cleanRedis.password;
+      config.redis = cleanRedis;
+
       const redisOpts = {...config.redis, maxRetriesPerRequest: null};
 
       // Job processor — shared across all tier workers

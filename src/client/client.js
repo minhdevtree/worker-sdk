@@ -1,4 +1,5 @@
 import {Queue} from 'bullmq';
+import {randomUUID} from 'crypto';
 import {loadConfig} from '../config/loader.js';
 import {TierManager} from '../worker/tierManager.js';
 
@@ -11,6 +12,12 @@ import {TierManager} from '../worker/tierManager.js';
  */
 export function createClient(configPath) {
   const config = loadConfig(configPath);
+
+  // Clean up Redis options — remove empty password
+  if (config.redis && !config.redis.password) {
+    delete config.redis.password;
+  }
+
   const queues = new Map();
 
   function getQueue(tier) {
@@ -30,6 +37,7 @@ export function createClient(configPath) {
 
       const queue = getQueue(jobConfig.tier || 'medium');
       const opts = buildJobOpts(jobConfig);
+      opts.jobId = `${jobName}-${randomUUID()}`;
 
       return queue.add(jobName, payload, opts);
     },
