@@ -34,6 +34,10 @@ redis:
   password: ${REDIS_PASSWORD:-}
   tls: ${REDIS_TLS:-}
 
+logging:
+  dir: ./logs             # structured JSON log files (one per day)
+  retentionDays: 30       # auto-delete old files on startup
+
 dashboard:
   port: 3800
   auth:
@@ -152,9 +156,50 @@ Basic auth is required — set `username` and `password` in config.
 export async function execute(payload, context) {
   context.jobId    // unique job ID — format: jobName-uuid
   context.attempt  // current attempt number (1-based)
-  context.logger   // {info, warn, error} — writes to Bull Board + stdout
+  context.logger   // {info, warn, error} — writes to Bull Board + stdout + log file
   context.signal   // AbortSignal — fires when timeout expires
 }
+```
+
+## File Logging
+
+When `logging.dir` is configured, all job logs are written to daily JSON line files on disk:
+
+```
+logs/
+  2026-04-14.log
+  2026-04-13.log
+  ...
+```
+
+Each line is a JSON object:
+
+```json
+{"ts":"2026-04-14T10:30:00.123Z","job":"processOrder","id":"processOrder-abc123","level":"INFO","msg":"Processing","data":{"orderId":42}}
+```
+
+Both `context.logger.info/warn/error` and captured `console.log/warn/error` are written.
+
+Logs are kept for `retentionDays` (default 30). Old files are auto-deleted on worker startup.
+
+Search with grep:
+
+```bash
+# All errors from a specific day
+grep '"ERROR"' logs/2026-04-14.log
+
+# Everything for a specific job ID
+grep 'processOrder-abc123' logs/2026-04-14.log
+
+# Search across multiple days
+grep 'shopId.*xyz' logs/2026-04-*.log
+```
+
+For Docker deployments, mount the logs directory as a volume so files persist on the host:
+
+```yaml
+volumes:
+  - ./logs:/app/functions/logs
 ```
 
 ## Cron Jobs
