@@ -12,12 +12,6 @@ import {TierManager} from '../worker/tierManager.js';
  */
 export function createClient(configPath) {
   const config = loadConfig(configPath);
-
-  // Clean up Redis options — remove empty password
-  if (config.redis && !config.redis.password) {
-    delete config.redis.password;
-  }
-
   const queues = new Map();
 
   function getQueue(tier) {

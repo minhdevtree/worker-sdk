@@ -19,6 +19,13 @@ export function loadConfig(configPath) {
 
   normalizeRedisOptions(config.redis);
 
+  // Validate Redis config exists after normalization
+  if (!config.redis || (!config.redis.host && !config.redis.port)) {
+    throw new Error(
+      'worker.config.yml: redis config is required. Set redis.host/port in YAML or via REDIS_HOST/REDIS_PORT env vars.'
+    );
+  }
+
   return config;
 }
 
@@ -40,7 +47,9 @@ function normalizeRedisOptions(redis) {
   }
 
   if (typeof redis.port === 'string') {
-    redis.port = parseInt(redis.port, 10);
+    const parsed = parseInt(redis.port, 10);
+    if (Number.isNaN(parsed)) throw new Error(`Invalid redis.port: "${redis.port}"`);
+    redis.port = parsed;
   }
 
   // Empty/null/false → no TLS

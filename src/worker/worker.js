@@ -35,11 +35,7 @@ export function createWorker(configPath) {
         throw new Error(`Registered handlers not defined in config: ${unconfigured.join(', ')}`);
       }
 
-      // Clean up Redis options — remove empty password
-      const cleanRedis = {...config.redis};
-      if (!cleanRedis.password) delete cleanRedis.password;
-      config.redis = cleanRedis;
-
+      // Shared Redis opts for all BullMQ instances (workers, queues, cron)
       const redisOpts = {...config.redis, maxRetriesPerRequest: null};
 
       // Job processor — shared across all tier workers
@@ -53,18 +49,22 @@ export function createWorker(configPath) {
       // Create tier workers
       tierManager = new TierManager(config.concurrency, redisOpts, processor);
 
-      // Create queues for dashboard visibility
+      // Create queues for dashboard visibility (same redisOpts for consistency)
       for (const tier of Object.keys(config.concurrency)) {
         const queueName = TierManager.queueName(tier);
-        dashboardQueues.push(new Queue(queueName, {connection: config.redis}));
+        dashboardQueues.push(new Queue(queueName, {connection: redisOpts}));
       }
 
-      // Register cron jobs
-      cronManager = new CronManager(config.redis);
+      // Register cron jobs (same redisOpts)
+      cronManager = new CronManager(redisOpts);
       await cronManager.register(config.jobs);
 
       // Start dashboard
       if (config.dashboard?.port) {
+        if (!config.dashboard.auth?.username || !config.dashboard.auth?.password) {
+          console.warn('[worker-sdk] WARNING: Dashboard running without authentication!');
+        }
+
         const app = createDashboardApp({
           queues: dashboardQueues,
           auth: config.dashboard.auth

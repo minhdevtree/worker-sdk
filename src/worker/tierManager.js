@@ -12,6 +12,9 @@ export class TierManager {
         connection: redisOpts,
         concurrency: limit
       });
+      worker.on('error', err => {
+        console.error(`[worker-sdk] Worker error on ${queueName}:`, err.message);
+      });
       this._workers.push(worker);
     }
   }

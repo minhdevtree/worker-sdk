@@ -11,7 +11,7 @@ describe('JobExecutor', () => {
       data: {shopId: '123'},
       id: 'job-1',
       attemptsMade: 0,
-      log: vi.fn(),
+      log: vi.fn().mockResolvedValue(0),
       updateProgress: vi.fn()
     };
 
@@ -46,7 +46,7 @@ describe('JobExecutor', () => {
       data: {},
       id: 'job-2',
       attemptsMade: 0,
-      log: vi.fn(),
+      log: vi.fn().mockResolvedValue(0),
       updateProgress: vi.fn()
     };
 
@@ -65,18 +65,38 @@ describe('JobExecutor', () => {
       data: {},
       id: 'job-3',
       attemptsMade: 0,
-      log: vi.fn(),
+      log: vi.fn().mockResolvedValue(0),
       updateProgress: vi.fn()
     };
 
     const executor = new JobExecutor();
     await executor.run(handler, mockJob, 30000);
 
-    // logger.info() writes once directly + once via console interception = 2 calls per log line
-    // So 2 logger calls (info + error) = 4 job.log calls total
+    // logger writes directly to job.log (no double-write — console capture uses process.stdout)
     const logCalls = mockJob.log.mock.calls.map(c => c[0]);
     expect(logCalls.some(entry => entry.includes('test message'))).toBe(true);
     expect(logCalls.some(entry => entry.includes('error occurred'))).toBe(true);
+  });
+
+  it('should capture console.log inside handler to job.log via AsyncLocalStorage', async () => {
+    const handler = vi.fn(async (payload, context) => {
+      console.log('captured message');
+    });
+
+    const mockJob = {
+      name: 'consoleJob',
+      data: {},
+      id: 'job-5',
+      attemptsMade: 0,
+      log: vi.fn().mockResolvedValue(0),
+      updateProgress: vi.fn()
+    };
+
+    const executor = new JobExecutor();
+    await executor.run(handler, mockJob, 30000);
+
+    const logCalls = mockJob.log.mock.calls.map(c => c[0]);
+    expect(logCalls.some(entry => entry.includes('captured message'))).toBe(true);
   });
 
   it('should propagate handler errors', async () => {
@@ -88,7 +108,7 @@ describe('JobExecutor', () => {
       data: {},
       id: 'job-4',
       attemptsMade: 0,
-      log: vi.fn(),
+      log: vi.fn().mockResolvedValue(0),
       updateProgress: vi.fn()
     };
 

@@ -1,7 +1,50 @@
+import {AsyncLocalStorage} from 'node:async_hooks';
+
+const jobStorage = new AsyncLocalStorage();
+let consolePatched = false;
+
+/**
+ * Patch console once at module load to route logs to the active job (if any).
+ * Uses AsyncLocalStorage so each concurrent job gets its own context — no race conditions.
+ */
+function patchConsoleOnce() {
+  if (consolePatched) return;
+  consolePatched = true;
+
+  const originalLog = console.log;
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+
+  const capture = (originalFn, level) => {
+    return (...args) => {
+      originalFn.apply(console, args);
+
+      const job = jobStorage.getStore();
+      if (job) {
+        const message = args
+          .map(a => (typeof a === 'string' ? a : JSON.stringify(a)))
+          .join(' ');
+        job.log(`[${level}] ${message}`).catch(() => {});
+      }
+    };
+  };
+
+  console.log = capture(originalLog, 'LOG');
+  console.info = capture(originalInfo, 'INFO');
+  console.warn = capture(originalWarn, 'WARN');
+  console.error = capture(originalError, 'ERROR');
+}
+
 export class JobExecutor {
+  constructor() {
+    patchConsoleOnce();
+  }
+
   /**
    * Execute a handler with timeout and structured context.
-   * Intercepts console.log/warn/error during execution and pipes to job.log().
+   * Console output is automatically captured to the job's BullMQ logs
+   * via AsyncLocalStorage (concurrency-safe).
    *
    * @param {Function} handler - async function(payload, context)
    * @param {import('bullmq').Job} job - BullMQ job instance
@@ -25,57 +68,19 @@ export class JobExecutor {
       logger
     };
 
-    // Intercept console output during job execution
-    const restore = interceptConsole(job);
-
     try {
-      const result = await handler(job.data, context);
+      // Run handler inside AsyncLocalStorage scope so console capture routes to this job
+      const result = await jobStorage.run(job, () => handler(job.data, context));
       return result;
     } finally {
       if (timer) clearTimeout(timer);
-      restore();
     }
   }
 }
 
 /**
- * Intercept console.log/warn/error and pipe to job.log() + original console.
- * Returns a restore function to undo the interception.
- */
-function interceptConsole(job) {
-  const originalLog = console.log;
-  const originalWarn = console.warn;
-  const originalError = console.error;
-  const originalInfo = console.info;
-
-  const capture = (originalFn, level) => {
-    return (...args) => {
-      // Write to terminal (original behavior)
-      originalFn.apply(console, args);
-
-      // Write to Redis (visible in Bull Board)
-      const message = args
-        .map(a => (typeof a === 'string' ? a : JSON.stringify(a)))
-        .join(' ');
-      job.log(`[${level}] ${message}`);
-    };
-  };
-
-  console.log = capture(originalLog, 'LOG');
-  console.info = capture(originalInfo, 'INFO');
-  console.warn = capture(originalWarn, 'WARN');
-  console.error = capture(originalError, 'ERROR');
-
-  return () => {
-    console.log = originalLog;
-    console.info = originalInfo;
-    console.warn = originalWarn;
-    console.error = originalError;
-  };
-}
-
-/**
  * Create a structured logger that writes to BullMQ job logs + terminal.
+ * Uses the real console (before patching) to avoid double-capture.
  */
 function createJobLogger(job) {
   const prefix = `[${job.name}:${job.id}]`;
@@ -86,11 +91,16 @@ function createJobLogger(job) {
       : `[${level.toUpperCase()}] ${message}`;
 
     // Write to Redis (visible in Bull Board)
-    job.log(entry);
+    job.log(entry).catch(() => {});
 
-    // Write to terminal (uses original console, not intercepted)
-    const consoleFn = level === 'error' ? console.error : console.info;
-    consoleFn(`${prefix} ${entry}`);
+    // Write to terminal with job prefix
+    // Use process.stdout/stderr directly to avoid re-entering the console patch
+    const output = `${prefix} ${entry}\n`;
+    if (level === 'error') {
+      process.stderr.write(output);
+    } else {
+      process.stdout.write(output);
+    }
   };
 
   return {

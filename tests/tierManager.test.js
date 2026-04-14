@@ -7,6 +7,7 @@ vi.mock('bullmq', () => ({
     this.opts = opts;
     this.closed = false;
     this.close = vi.fn(async () => {});
+    this.on = vi.fn();
   })
 }));
 
