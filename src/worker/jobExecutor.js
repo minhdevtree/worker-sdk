@@ -2,6 +2,24 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 
 const jobStorage = new AsyncLocalStorage();
 let consolePatched = false;
+let fileLogger = null;
+
+/**
+ * Set the file logger instance. Called by createWorker after loading config.
+ * @param {import('../logging/fileLogger.js').FileLogger|null} logger
+ */
+export function setFileLogger(logger) {
+  fileLogger = logger;
+}
+
+/**
+ * Write to the file logger if configured.
+ */
+function writeToFile(entry) {
+  if (fileLogger) {
+    fileLogger.write(entry);
+  }
+}
 
 /**
  * Patch console once at module load to route logs to the active job (if any).
@@ -20,12 +38,13 @@ function patchConsoleOnce() {
     return (...args) => {
       originalFn.apply(console, args);
 
-      const job = jobStorage.getStore();
-      if (job) {
+      const store = jobStorage.getStore();
+      if (store) {
         const message = args
           .map(a => (typeof a === 'string' ? a : JSON.stringify(a)))
           .join(' ');
-        job.log(`[${level}] ${message}`).catch(() => {});
+        store.job.log(`[${level}] ${message}`).catch(() => {});
+        writeToFile({job: store.jobName, id: store.jobId, level, msg: message});
       }
     };
   };
@@ -44,7 +63,7 @@ export class JobExecutor {
   /**
    * Execute a handler with timeout and structured context.
    * Console output is automatically captured to the job's BullMQ logs
-   * via AsyncLocalStorage (concurrency-safe).
+   * and file logs via AsyncLocalStorage (concurrency-safe).
    *
    * @param {Function} handler - async function(payload, context)
    * @param {import('bullmq').Job} job - BullMQ job instance
@@ -68,9 +87,11 @@ export class JobExecutor {
       logger
     };
 
+    // Store both the BullMQ job (for job.log) and metadata (for file logging)
+    const store = {job, jobName: job.name, jobId: job.id};
+
     try {
-      // Run handler inside AsyncLocalStorage scope so console capture routes to this job
-      const result = await jobStorage.run(job, () => handler(job.data, context));
+      const result = await jobStorage.run(store, () => handler(job.data, context));
       return result;
     } finally {
       if (timer) clearTimeout(timer);
@@ -79,8 +100,7 @@ export class JobExecutor {
 }
 
 /**
- * Create a structured logger that writes to BullMQ job logs + terminal.
- * Uses the real console (before patching) to avoid double-capture.
+ * Create a structured logger that writes to BullMQ job logs + terminal + file.
  */
 function createJobLogger(job) {
   const prefix = `[${job.name}:${job.id}]`;
@@ -93,14 +113,22 @@ function createJobLogger(job) {
     // Write to Redis (visible in Bull Board)
     job.log(entry).catch(() => {});
 
-    // Write to terminal with job prefix
-    // Use process.stdout/stderr directly to avoid re-entering the console patch
+    // Write to terminal
     const output = `${prefix} ${entry}\n`;
     if (level === 'error') {
       process.stderr.write(output);
     } else {
       process.stdout.write(output);
     }
+
+    // Write to file log
+    writeToFile({
+      job: job.name,
+      id: job.id,
+      level: level.toUpperCase(),
+      msg: message,
+      data
+    });
   };
 
   return {

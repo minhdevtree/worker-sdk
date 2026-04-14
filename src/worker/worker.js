@@ -1,11 +1,12 @@
 import {Queue} from 'bullmq';
 import {loadConfig} from '../config/loader.js';
 import {HandlerRegistry} from './handlerRegistry.js';
-import {JobExecutor} from './jobExecutor.js';
+import {JobExecutor, setFileLogger} from './jobExecutor.js';
 import {TierManager} from './tierManager.js';
 import {CronManager} from '../cron/cronManager.js';
 import {createDashboardApp} from '../dashboard/server.js';
 import {ShutdownManager} from '../shutdown/shutdownManager.js';
+import {FileLogger} from '../logging/fileLogger.js';
 
 /**
  * Create a worker instance.
@@ -33,6 +34,20 @@ export function createWorker(configPath) {
       const unconfigured = registry.names().filter(n => !config.jobs[n]);
       if (unconfigured.length > 0) {
         throw new Error(`Registered handlers not defined in config: ${unconfigured.join(', ')}`);
+      }
+
+      // Set up file logging if configured
+      if (config.logging?.dir) {
+        const fl = new FileLogger({
+          dir: config.logging.dir,
+          retentionDays: config.logging.retentionDays || 30
+        });
+        setFileLogger(fl);
+
+        // Clean up old log files on startup
+        fl.cleanup();
+
+        console.info(`[worker-sdk] File logging enabled: ${config.logging.dir} (retention: ${config.logging.retentionDays || 30} days)`);
       }
 
       // Shared Redis opts for all BullMQ instances (workers, queues, cron)
