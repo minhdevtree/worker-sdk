@@ -233,4 +233,138 @@ jobs: {}
 
     delete process.env.TEST_BAD_BATCH;
   });
+
+  it('should parse worker block with auto-gen workerId when id empty', () => {
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  id:
+  heartbeat:
+    enabled: true
+    intervalMs: 10000
+    ttlMs: 30000
+jobs: {}
+`);
+    const config = loadConfig(configPath);
+    expect(config.worker.id).toBeFalsy(); // engine computes at runtime
+    expect(config.worker.heartbeat).toEqual({
+      enabled: true,
+      intervalMs: 10000,
+      ttlMs: 30000
+    });
+  });
+
+  it('should apply heartbeat defaults when worker block omits them', () => {
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  id: custom-id
+jobs: {}
+`);
+    const config = loadConfig(configPath);
+    expect(config.worker.id).toBe('custom-id');
+    expect(config.worker.heartbeat).toEqual({
+      enabled: true,
+      intervalMs: 10000,
+      ttlMs: 30000
+    });
+  });
+
+  it('should coerce heartbeat numbers from env strings and reject NaN', () => {
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  heartbeat:
+    intervalMs: "5000"
+    ttlMs: "15000"
+jobs: {}
+`);
+    const config = loadConfig(configPath);
+    expect(config.worker.heartbeat.intervalMs).toBe(5000);
+    expect(config.worker.heartbeat.ttlMs).toBe(15000);
+
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  heartbeat:
+    intervalMs: notanumber
+jobs: {}
+`);
+    expect(() => loadConfig(configPath)).toThrow(/intervalMs/i);
+  });
+
+  it('should reject heartbeat intervalMs <= 0', () => {
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  heartbeat:
+    intervalMs: 0
+    ttlMs: 30000
+jobs: {}
+`);
+    expect(() => loadConfig(configPath)).toThrow(/intervalMs.*> 0/i);
+  });
+
+  it('should reject intervalMs >= ttlMs', () => {
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  heartbeat:
+    intervalMs: 30000
+    ttlMs: 30000
+jobs: {}
+`);
+    expect(() => loadConfig(configPath)).toThrow(/intervalMs.*ttlMs/i);
+  });
+
+  it('should coerce cron.leader from env string', () => {
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+cron:
+  leader: "true"
+jobs: {}
+`);
+    expect(loadConfig(configPath).cron.leader).toBe(true);
+
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+cron:
+  leader: "false"
+jobs: {}
+`);
+    expect(loadConfig(configPath).cron.leader).toBe(false);
+  });
+
+  it('should default cron.leader to false when cron block absent', () => {
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+jobs: {}
+`);
+    expect(loadConfig(configPath).cron.leader).toBe(false);
+  });
 });
