@@ -84,7 +84,7 @@ export function createWorker(configPath) {
 
       // Register cron jobs (same redisOpts)
       cronManager = new CronManager(redisOpts);
-      await cronManager.register(config.jobs);
+      await cronManager.register(config.jobs, {leader: config.cron?.leader === true});
 
       // Dashboard is no longer started by createWorker — run createDashboard separately
       if (config.dashboard?.port) {
