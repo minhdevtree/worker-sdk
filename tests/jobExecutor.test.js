@@ -1,7 +1,12 @@
-import {describe, it, expect, vi} from 'vitest';
-import {JobExecutor} from '../src/worker/jobExecutor.js';
+import {describe, it, expect, vi, afterEach} from 'vitest';
+import {JobExecutor, setLokiShipper} from '../src/worker/jobExecutor.js';
 
 describe('JobExecutor', () => {
+  afterEach(() => {
+    // Reset Loki shipper so it doesn't leak between tests
+    setLokiShipper(null);
+  });
+
   it('should execute handler with payload and context', async () => {
     const handler = vi.fn().mockResolvedValue({done: true});
     const executor = new JobExecutor();
@@ -113,5 +118,63 @@ describe('JobExecutor', () => {
     };
 
     await expect(executor.run(handler, mockJob, 30000)).rejects.toThrow('Handler failed');
+  });
+
+  it('should ship logs to LokiShipper when one is registered', async () => {
+    const pushMock = vi.fn();
+    setLokiShipper({push: pushMock});
+
+    const handler = vi.fn(async (payload, context) => {
+      context.logger.info('to loki', {shopId: 'xyz'});
+    });
+
+    const mockJob = {
+      name: 'lokiJob',
+      data: {},
+      id: 'job-loki-1',
+      attemptsMade: 0,
+      log: vi.fn().mockResolvedValue(0),
+      updateProgress: vi.fn()
+    };
+
+    const executor = new JobExecutor();
+    await executor.run(handler, mockJob, 30000);
+
+    expect(pushMock).toHaveBeenCalledTimes(1);
+    const [entry] = pushMock.mock.calls[0];
+    expect(entry.job).toBe('lokiJob');
+    expect(entry.id).toBe('job-loki-1');
+    expect(entry.level).toBe('INFO');
+    expect(entry.msg).toBe('to loki');
+    expect(entry.data).toEqual({shopId: 'xyz'});
+  });
+
+  it('should ship console.log output to LokiShipper via AsyncLocalStorage', async () => {
+    const pushMock = vi.fn();
+    setLokiShipper({push: pushMock});
+
+    const handler = vi.fn(async () => {
+      console.log('captured');
+    });
+
+    const mockJob = {
+      name: 'lokiConsoleJob',
+      data: {},
+      id: 'job-loki-2',
+      attemptsMade: 0,
+      log: vi.fn().mockResolvedValue(0),
+      updateProgress: vi.fn()
+    };
+
+    const executor = new JobExecutor();
+    await executor.run(handler, mockJob, 30000);
+
+    expect(pushMock).toHaveBeenCalled();
+    const entries = pushMock.mock.calls.map(c => c[0]);
+    const consoleEntry = entries.find(e => e.msg === 'captured');
+    expect(consoleEntry).toBeDefined();
+    expect(consoleEntry.job).toBe('lokiConsoleJob');
+    expect(consoleEntry.id).toBe('job-loki-2');
+    expect(consoleEntry.level).toBe('LOG');
   });
 });

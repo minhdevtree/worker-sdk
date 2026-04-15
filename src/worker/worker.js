@@ -1,12 +1,13 @@
 import {Queue} from 'bullmq';
 import {loadConfig} from '../config/loader.js';
 import {HandlerRegistry} from './handlerRegistry.js';
-import {JobExecutor, setFileLogger} from './jobExecutor.js';
+import {JobExecutor, setFileLogger, setLokiShipper} from './jobExecutor.js';
 import {TierManager} from './tierManager.js';
 import {CronManager} from '../cron/cronManager.js';
 import {createDashboardApp} from '../dashboard/server.js';
 import {ShutdownManager} from '../shutdown/shutdownManager.js';
 import {FileLogger} from '../logging/fileLogger.js';
+import {LokiShipper} from '../logging/lokiShipper.js';
 
 /**
  * Create a worker instance.
@@ -50,6 +51,19 @@ export function createWorker(configPath) {
         console.info(`[worker-sdk] File logging enabled: ${config.logging.dir} (retention: ${config.logging.retentionDays || 30} days)`);
       }
 
+      // Set up Loki log shipping if configured
+      let lokiShipper = null;
+      if (config.logging?.loki?.url) {
+        lokiShipper = new LokiShipper({
+          url: config.logging.loki.url,
+          batchSize: config.logging.loki.batchSize,
+          flushInterval: config.logging.loki.flushInterval,
+          labels: config.logging.loki.labels
+        });
+        setLokiShipper(lokiShipper);
+        console.info(`[worker-sdk] Loki shipping enabled: ${config.logging.loki.url}`);
+      }
+
       // Shared Redis opts for all BullMQ instances (workers, queues, cron)
       const redisOpts = {...config.redis, maxRetriesPerRequest: null};
 
@@ -90,7 +104,9 @@ export function createWorker(configPath) {
         });
       }
 
-      // Register shutdown handlers
+      // Register shutdown handlers (executed in FIFO registration order).
+      // Loki shipper must be registered LAST so it flushes AFTER workers drain —
+      // in-flight jobs can still push logs while BullMQ workers are closing.
       shutdown.register('tierManager', () => tierManager.closeAll());
       shutdown.register('cronManager', () => cronManager.closeAll());
       shutdown.register('dashboardQueues', () =>
@@ -100,6 +116,9 @@ export function createWorker(configPath) {
         shutdown.register('dashboard', () =>
           new Promise(resolve => dashboardServer.close(resolve))
         );
+      }
+      if (lokiShipper) {
+        shutdown.register('lokiShipper', () => lokiShipper.stop());
       }
       shutdown.installSignalHandlers(() => process.exit(0));
 
