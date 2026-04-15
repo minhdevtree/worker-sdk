@@ -28,6 +28,17 @@ redis:
   password: ${REDIS_PASSWORD:-}
   tls: ${REDIS_TLS:-}
 
+logging:
+  dir: ./logs                        # local file buffer (short retention)
+  retentionDays: 7
+  loki:                              # optional — ship to Loki for long-term search
+    url: ${LOKI_URL:-}
+    batchSize: 100
+    flushInterval: 5000
+    labels:
+      app: my-app
+      env: production
+
 dashboard:
   port: 3800
   auth:
@@ -227,6 +238,35 @@ import {dispatchJob} from '@yourapp/helpers/worker/workerClient';
 await dispatchJob('myJob', {shopId, data});
 ```
 
+## Running Bull Board as a standalone service
+
+Instead of letting `createWorker` start the dashboard, run it as a separate process:
+
+```js
+// dashboard.mjs
+import {createDashboard} from '@minhdevtree/worker-sdk';
+
+const dashboard = createDashboard('./worker.config.yml');
+await dashboard.start();
+```
+
+Add to your `package.json`:
+
+```json
+{
+  "scripts": {
+    "dashboard": "node dashboard.mjs"
+  }
+}
+```
+
+Or run as a dedicated Docker container alongside your workers.
+
+Benefits:
+- Dashboard survives worker restarts
+- One dashboard serves many workers (all workers share the same Redis)
+- Clearer separation of concerns
+
 ## Running
 
 ### 1. Make sure Redis is reachable
@@ -262,6 +302,61 @@ You can see:
 ### 4. Start your app (in a separate terminal)
 
 The app and worker share the Redis connection. The app dispatches jobs, the worker processes them.
+
+## Long-term log search with Loki + Grafana
+
+The SDK has built-in support for shipping logs to Grafana Loki. This solves the problem that Redis only keeps the last ~1000 jobs — Loki stores logs for months with a proper search UI via Grafana.
+
+### 1. Run Loki + Grafana
+
+Example `docker-compose.yml` snippet — add these services to your existing compose file alongside your worker and Redis. `GRAFANA_ADMIN_PASSWORD` goes in your `.env`. For the Loki server config, see the [Loki configuration docs](https://grafana.com/docs/loki/latest/configure/).
+
+```yaml
+services:
+  loki:
+    image: grafana/loki:3.0.0
+    ports: ["3100:3100"]
+    volumes:
+      - ./loki/config.yml:/etc/loki/config.yml
+      - loki-data:/var/loki
+    command: -config.file=/etc/loki/config.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on: [loki]
+
+volumes:
+  loki-data:
+  grafana-data:
+```
+
+### 2. Enable shipping in your worker config
+
+```yaml
+logging:
+  dir: ./logs
+  retentionDays: 7
+  loki:
+    url: http://loki:3100
+    batchSize: 100
+    flushInterval: 5000
+    labels:
+      app: my-app
+      env: production
+```
+
+### 3. Search logs in Grafana
+
+Add Loki as a data source in Grafana (`http://loki:3100`), then open the left sidebar → Explore → select the Loki datasource. Use LogQL queries like:
+
+- All logs for a shop: `{app="my-app"} | json | data_shopId="xyz"`
+- Only errors today: `{app="my-app", level="ERROR"}`
+- A specific job run: `{app="my-app"} | json | id="myJob-abc123"`
 
 ## Migrating from Firebase Pub/Sub
 
@@ -335,6 +430,7 @@ export async function execute(payload, context) {
 | `REDIS_PORT` | No | Override YAML default |
 | `REDIS_PASSWORD` | No | Override YAML default |
 | `REDIS_TLS` | No | Set to `true` to enable TLS for Redis |
+| `LOKI_URL` | No | Loki push endpoint. Empty = file-only logging |
 
 Any field in `worker.config.yml` can be made env-driven via `${VAR_NAME}` or `${VAR_NAME:-default}` syntax.
 

@@ -1,6 +1,6 @@
 {
   "name": "@minhdevtree/worker-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-hosted background job runner powered by BullMQ + Redis",
   "type": "module",
   "main": "src/index.cjs",
@@ -17,6 +17,19 @@
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/minhdevtree/worker-sdk"
+  },
+  "license": "MIT",
+  "keywords": [
+    "worker",
+    "job-queue",
+    "bullmq",
+    "redis",
+    "background-jobs",
+    "self-hosted"
+  ],
   "dependencies": {
     "bullmq": "^5.0.0",
     "@bull-board/api": "^6.0.0",

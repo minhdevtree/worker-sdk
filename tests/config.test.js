@@ -118,4 +118,119 @@ jobs:
     expect(config.jobs.heavyJob.tier).toBe('heavy');
     expect(config.jobs.lightJob.tier).toBe('light');
   });
+
+  it('should load logging.loki config with defaults', () => {
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+logging:
+  dir: ./logs
+  retentionDays: 7
+  loki:
+    url: http://loki:3100
+    batchSize: 100
+    flushInterval: 5000
+    labels:
+      app: seo-worker
+      env: production
+jobs: {}
+`);
+
+    const config = loadConfig(configPath);
+
+    expect(config.logging.loki).toEqual({
+      url: 'http://loki:3100',
+      batchSize: 100,
+      flushInterval: 5000,
+      labels: {app: 'seo-worker', env: 'production'}
+    });
+  });
+
+  it('should treat empty loki.url as loki disabled', () => {
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+logging:
+  dir: ./logs
+  loki:
+    url: ''
+jobs: {}
+`);
+
+    const config = loadConfig(configPath);
+
+    expect(config.logging.loki).toBeUndefined();
+  });
+
+  it('should interpolate LOKI_URL env var', () => {
+    process.env.TEST_LOKI_URL = 'http://my-loki:3100';
+
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+logging:
+  dir: ./logs
+  loki:
+    url: \${TEST_LOKI_URL}
+jobs: {}
+`);
+
+    const config = loadConfig(configPath);
+    expect(config.logging.loki.url).toBe('http://my-loki:3100');
+
+    delete process.env.TEST_LOKI_URL;
+  });
+
+  it('should coerce string batchSize and flushInterval from env vars', () => {
+    process.env.TEST_BATCH_SIZE = '250';
+    process.env.TEST_FLUSH_INT = '8000';
+
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+logging:
+  dir: ./logs
+  loki:
+    url: http://loki:3100
+    batchSize: \${TEST_BATCH_SIZE}
+    flushInterval: \${TEST_FLUSH_INT}
+jobs: {}
+`);
+
+    const config = loadConfig(configPath);
+    expect(config.logging.loki.batchSize).toBe(250);
+    expect(config.logging.loki.flushInterval).toBe(8000);
+
+    delete process.env.TEST_BATCH_SIZE;
+    delete process.env.TEST_FLUSH_INT;
+  });
+
+  it('should throw on invalid (non-numeric) loki.batchSize', () => {
+    process.env.TEST_BAD_BATCH = 'not-a-number';
+
+    const configPath = join(tmpDir, 'worker.config.yml');
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+logging:
+  dir: ./logs
+  loki:
+    url: http://loki:3100
+    batchSize: \${TEST_BAD_BATCH}
+jobs: {}
+`);
+
+    expect(() => loadConfig(configPath)).toThrow(/Invalid loki.batchSize/);
+
+    delete process.env.TEST_BAD_BATCH;
+  });
 });

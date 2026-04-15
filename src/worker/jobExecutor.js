@@ -12,12 +12,25 @@ export function setFileLogger(logger) {
   fileLogger = logger;
 }
 
+let lokiShipper = null;
+
 /**
- * Write to the file logger if configured.
+ * Set the Loki shipper instance. Called by createWorker after loading config.
+ * @param {import('../logging/lokiShipper.js').LokiShipper|null} shipper
  */
-function writeToFile(entry) {
+export function setLokiShipper(shipper) {
+  lokiShipper = shipper;
+}
+
+/**
+ * Write to the file logger and Loki shipper if configured.
+ */
+function writeLogEntry(entry) {
   if (fileLogger) {
     fileLogger.write(entry);
+  }
+  if (lokiShipper) {
+    lokiShipper.push(entry);
   }
 }
 
@@ -44,7 +57,7 @@ function patchConsoleOnce() {
           .map(a => (typeof a === 'string' ? a : JSON.stringify(a)))
           .join(' ');
         store.job.log(`[${level}] ${message}`).catch(() => {});
-        writeToFile({job: store.jobName, id: store.jobId, level, msg: message});
+        writeLogEntry({job: store.jobName, id: store.jobId, level, msg: message});
       }
     };
   };
@@ -121,8 +134,7 @@ function createJobLogger(job) {
       process.stdout.write(output);
     }
 
-    // Write to file log
-    writeToFile({
+    writeLogEntry({
       job: job.name,
       id: job.id,
       level: level.toUpperCase(),

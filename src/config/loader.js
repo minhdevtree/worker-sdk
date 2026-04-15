@@ -18,6 +18,7 @@ export function loadConfig(configPath) {
   config.jobs = config.jobs || {};
 
   normalizeRedisOptions(config.redis);
+  normalizeLokiOptions(config.logging);
 
   // Validate Redis config exists after normalization
   if (!config.redis || (!config.redis.host && !config.redis.port)) {
@@ -65,6 +66,40 @@ function normalizeRedisOptions(redis) {
     redis.tls = {};
   }
   // If redis.tls is already an object, leave it alone (advanced TLS config)
+}
+
+/**
+ * Normalize logging.loki options after env interpolation.
+ * - Remove loki block entirely if url is empty (keeps SDK in file-only mode).
+ * - Coerce batchSize and flushInterval from string to number (env vars are always strings).
+ * - Apply defaults: batchSize=100, flushInterval=5000.
+ */
+function normalizeLokiOptions(logging) {
+  if (!logging || !logging.loki) return;
+
+  const loki = logging.loki;
+
+  // Empty url = Loki disabled
+  if (!loki.url) {
+    delete logging.loki;
+    return;
+  }
+
+  if (typeof loki.batchSize === 'string') {
+    const parsed = parseInt(loki.batchSize, 10);
+    if (Number.isNaN(parsed)) throw new Error(`Invalid loki.batchSize: "${loki.batchSize}"`);
+    loki.batchSize = parsed;
+  }
+  if (typeof loki.flushInterval === 'string') {
+    const parsed = parseInt(loki.flushInterval, 10);
+    if (Number.isNaN(parsed)) throw new Error(`Invalid loki.flushInterval: "${loki.flushInterval}"`);
+    loki.flushInterval = parsed;
+  }
+
+  // Defaults (use ?? to preserve valid 0 / false values)
+  loki.batchSize = loki.batchSize ?? 100;
+  loki.flushInterval = loki.flushInterval ?? 5000;
+  loki.labels = loki.labels ?? {};
 }
 
 /**
