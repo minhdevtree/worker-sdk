@@ -267,4 +267,29 @@ describe('LokiShipper', () => {
   it('should throw if url is missing', () => {
     expect(() => new LokiShipper({})).toThrow(/url/);
   });
+
+  it('should include workerId in every stream label when provided', async () => {
+    let capturedBody;
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      capturedBody = JSON.parse(opts.body);
+      return {ok: true, status: 200};
+    });
+
+    const shipper = new LokiShipper({
+      url: 'http://loki:3100',
+      batchSize: 1,
+      flushInterval: 100000,
+      labels: {app: 'test-app'},
+      workerId: 'mac-mini-7'
+    });
+
+    shipper.push({job: 'testJob', id: 'job-1', level: 'INFO', msg: 'hello', data: {}});
+
+    // stop() triggers a final flush — assertions after are deterministic
+    await shipper.stop();
+
+    expect(capturedBody.streams).toHaveLength(1);
+    expect(capturedBody.streams[0].stream.workerId).toBe('mac-mini-7');
+    expect(capturedBody.streams[0].stream.app).toBe('test-app');
+  });
 });
