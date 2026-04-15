@@ -1,4 +1,5 @@
 import os from 'os';
+import {HEARTBEAT_KEY_PREFIX} from './heartbeatKey.js';
 
 /**
  * Heartbeat — writes a TTL'd key to Redis on a fixed interval.
@@ -26,7 +27,7 @@ export class Heartbeat {
     this._tiers = tiers;
     this._intervalMs = intervalMs;
     this._ttlMs = ttlMs;
-    this._key = `worker:heartbeat:${workerId}`;
+    this._key = `${HEARTBEAT_KEY_PREFIX}${workerId}`;
     this._hostname = os.hostname();
     this._pid = process.pid;
     this._startedAt = Date.now();
