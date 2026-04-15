@@ -358,6 +358,81 @@ Add Loki as a data source in Grafana (`http://loki:3100`), then open the left si
 - Only errors today: `{app="my-app", level="ERROR"}`
 - A specific job run: `{app="my-app"} | json | id="myJob-abc123"`
 
+## Scaling with multiple workers
+
+Run N workers against one Redis/Loki/Grafana/Bull Board. The SDK handles worker identity, liveness, and cron coordination automatically when you configure the right env vars.
+
+### Single-machine scale with Docker Compose
+
+```yaml
+# docker-compose.yml
+services:
+  seo-worker-leader:
+    build: .
+    environment:
+      WORKER_ID: leader
+      CRON_LEADER: "true"
+      # ... rest of env
+    # singleton — no scale directive
+
+  seo-worker:
+    build: .
+    environment:
+      CRON_LEADER: "false"
+      # WORKER_ID unset → auto-generated ${hostname}-${pid}
+      # ... rest of env
+    # scalable
+```
+
+Start the stack:
+
+```bash
+docker compose up -d --scale seo-worker=3 --build
+# → 1 leader + 3 followers = 4 workers total
+```
+
+### Multi-machine scale
+
+Same image, different env vars per host:
+
+| Host | `WORKER_ID` | `CRON_LEADER` | `concurrency` override |
+|---|---|---|---|
+| services-1 | `services-1` | `true` | default |
+| vps-hanoi | `vps-hanoi` | `false` | `WORKER_CONCURRENCY_HEAVY=4` |
+| cloud-us | `cloud-us` | `false` | `WORKER_CONCURRENCY_LIGHT=0` |
+
+All connect to the same `REDIS_HOST` and `LOKI_URL`.
+
+### Inspecting the pool
+
+```bash
+# Live heartbeats in Redis
+redis-cli -p 6380 -a $REDIS_PASSWORD KEYS "worker:heartbeat:*"
+
+# Programmatic
+node -e "
+import('@minhdevtree/worker-sdk').then(async ({listWorkers}) => {
+  const Redis = (await import('ioredis')).default;
+  const redis = new Redis({host: '127.0.0.1', port: 6380, password: process.env.REDIS_PASSWORD});
+  const workers = await listWorkers(redis);
+  console.log(JSON.stringify(workers, null, 2));
+  await redis.quit();
+});
+"
+```
+
+### Graceful shutdown across the pool
+
+`docker compose down` (or a SIGTERM on a single container) triggers shutdown in this order within each worker:
+
+1. **heartbeat** — key deleted immediately; observers see the worker leave the pool within ≤ `ttlMs`
+2. **tierManager** — BullMQ workers drain in-flight jobs
+3. **cronManager** — (only on leader) closes queue connections
+4. **dashboardQueues** — closes the read-only Queue references that powered the embedded Bull Board (legacy)
+5. **lokiShipper** — final flush of buffered log lines
+
+Set `stop_grace_period: 35s` in compose for a worker handling long jobs.
+
 ## Migrating from Firebase Pub/Sub
 
 ### Before (Firebase)
@@ -431,6 +506,9 @@ export async function execute(payload, context) {
 | `REDIS_PASSWORD` | No | Override YAML default |
 | `REDIS_TLS` | No | Set to `true` to enable TLS for Redis |
 | `LOKI_URL` | No | Loki push endpoint. Empty = file-only logging |
+| `WORKER_ID` | No | Unique worker identity. Auto-generated `${hostname}-${pid}` if unset |
+| `CRON_LEADER` | No | Set to `true` on exactly one worker in the pool; defaults to `false` |
+| `HEARTBEAT_ENABLED` | No | Set to `false` to disable heartbeats. Wire via YAML: `worker.heartbeat.enabled: ${HEARTBEAT_ENABLED:-true}` |
 
 Any field in `worker.config.yml` can be made env-driven via `${VAR_NAME}` or `${VAR_NAME:-default}` syntax.
 

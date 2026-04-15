@@ -271,6 +271,84 @@ Log retention in Loki is controlled by the Loki server's own `retention_period` 
 
 **Setup your Loki stack** — see [SETUP.md](./SETUP.md) for a Docker Compose example that runs Loki + Grafana alongside the worker.
 
+## Multi-worker deployments
+
+A single Redis + Loki + Bull Board can serve any number of workers. Scale horizontally on one machine (`docker compose up --scale`) or across hosts.
+
+### Identity and specialization
+
+```yaml
+# worker.config.yml
+worker:
+  id: ${WORKER_ID:-}              # empty → auto-generated ${hostname}-${pid}
+
+concurrency:
+  heavy: 2
+  medium: 5
+  light: 0                        # 0 = opt out — this worker skips the light tier
+```
+
+Each worker gets its own ID. In Docker Compose `--scale N` mode the auto-generated default (`${hostname}-${pid}`) gives meaningful IDs because Docker assigns unique hostnames per replica. For multi-host deployments set `WORKER_ID=mac-mini` / `WORKER_ID=vps-hanoi` per host so Grafana labels stay readable.
+
+Tier opt-out via `concurrency: 0` enables heterogeneous pools: a beefy box can be heavy-only, a small box can be light-only. BullMQ distributes jobs atomically — a worker that doesn't subscribe to a tier never pulls from it.
+
+### Liveness: heartbeats
+
+```yaml
+worker:
+  heartbeat:
+    enabled: true                 # default
+    intervalMs: 10000             # beat every 10s
+    ttlMs: 30000                  # key expires after 30s of silence
+```
+
+Every worker writes a TTL'd key `worker:heartbeat:<workerId>` to Redis on the interval. If a worker dies or loses Redis connectivity, the key expires automatically. Enumerate live workers:
+
+```js
+import {listWorkers} from '@minhdevtree/worker-sdk';
+import Redis from 'ioredis';
+
+const redis = new Redis({host, port, password});
+const workers = await listWorkers(redis);
+// → [{workerId, hostname, pid, tiers, startedAt, lastBeat}, ...]
+```
+
+### Scheduled jobs: the cron leader
+
+```yaml
+cron:
+  leader: ${CRON_LEADER:-false}   # EXACTLY ONE worker should set this to true
+```
+
+In a multi-worker pool exactly one worker should be designated the cron leader. Only that worker registers scheduled jobs — others skip registration. If no worker has `cron.leader: true` and your `jobs` config includes cron entries, the SDK warns on startup and scheduled jobs do not fire.
+
+For a pool of three, one compose-file pattern:
+
+```yaml
+services:
+  worker-leader:
+    environment: {CRON_LEADER: "true"}
+    # one replica, always on
+  worker:
+    environment: {CRON_LEADER: "false"}
+    # scale this service: docker compose up -d --scale worker=N
+```
+
+### Filtering per worker in Grafana
+
+Every log pushed to Loki carries the `workerId` label automatically:
+
+```logql
+# just worker-2's logs
+{app="my-app", workerId="mac-mini-2"}
+
+# errors from any worker
+{app="my-app", level="ERROR"}
+
+# cross-worker comparison by job name
+{app="my-app", job="generateAnchor"} | json
+```
+
 ## Migration from Firebase Pub/Sub
 
 | Before (Firebase) | After (Worker SDK) |
