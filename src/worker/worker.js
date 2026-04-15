@@ -4,7 +4,6 @@ import {HandlerRegistry} from './handlerRegistry.js';
 import {JobExecutor, setFileLogger, setLokiShipper} from './jobExecutor.js';
 import {TierManager} from './tierManager.js';
 import {CronManager} from '../cron/cronManager.js';
-import {createDashboardApp} from '../dashboard/server.js';
 import {ShutdownManager} from '../shutdown/shutdownManager.js';
 import {FileLogger} from '../logging/fileLogger.js';
 import {LokiShipper} from '../logging/lokiShipper.js';
@@ -22,7 +21,6 @@ export function createWorker(configPath) {
 
   let tierManager;
   let cronManager;
-  let dashboardServer;
   let dashboardQueues = [];
 
   return {
@@ -88,20 +86,12 @@ export function createWorker(configPath) {
       cronManager = new CronManager(redisOpts);
       await cronManager.register(config.jobs);
 
-      // Start dashboard
+      // Dashboard is no longer started by createWorker — run createDashboard separately
       if (config.dashboard?.port) {
-        if (!config.dashboard.auth?.username || !config.dashboard.auth?.password) {
-          console.warn('[worker-sdk] WARNING: Dashboard running without authentication!');
-        }
-
-        const app = createDashboardApp({
-          queues: dashboardQueues,
-          auth: config.dashboard.auth
-        });
-
-        dashboardServer = app.listen(config.dashboard.port, () => {
-          console.info(`[worker-sdk] Dashboard running on port ${config.dashboard.port}`);
-        });
+        console.warn(
+          '[worker-sdk] dashboard.port is set but createWorker no longer runs the dashboard. ' +
+          'Use createDashboard("./worker.config.yml") in a separate process/container instead.'
+        );
       }
 
       // Register shutdown handlers (executed in FIFO registration order).
@@ -112,11 +102,6 @@ export function createWorker(configPath) {
       shutdown.register('dashboardQueues', () =>
         Promise.all(dashboardQueues.map(q => q.close()))
       );
-      if (dashboardServer) {
-        shutdown.register('dashboard', () =>
-          new Promise(resolve => dashboardServer.close(resolve))
-        );
-      }
       if (lokiShipper) {
         shutdown.register('lokiShipper', () => lokiShipper.stop());
       }

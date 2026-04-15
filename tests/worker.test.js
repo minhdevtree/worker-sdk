@@ -25,21 +25,6 @@ vi.mock('bullmq', () => {
   };
 });
 
-vi.mock('@bull-board/api', () => ({
-  createBullBoard: vi.fn()
-}));
-
-vi.mock('@bull-board/api/bullMQAdapter', () => ({
-  BullMQAdapter: vi.fn().mockImplementation(function(q) { this.queue = q; })
-}));
-
-vi.mock('@bull-board/express', () => ({
-  ExpressAdapter: vi.fn().mockImplementation(function() {
-    this.setBasePath = vi.fn();
-    this.getRouter = vi.fn().mockReturnValue((req, res, next) => next());
-  })
-}));
-
 import {createWorker} from '../src/worker/worker.js';
 
 describe('createWorker', () => {
@@ -102,5 +87,41 @@ jobs:
     worker.register('unknownJob', vi.fn());
 
     await expect(worker.start()).rejects.toThrow('not defined in config: unknownJob');
+  });
+
+  it('should warn if dashboard config is set (use createDashboard instead)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+dashboard:
+  port: 3800
+  auth:
+    username: admin
+    password: test
+concurrency:
+  heavy: 1
+  medium: 2
+  light: 3
+jobs:
+  testJob:
+    tier: medium
+    timeout: 5000
+`);
+
+    const worker = createWorker(configPath);
+    worker.register('testJob', vi.fn());
+    await worker.start();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('dashboard')
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('createDashboard')
+    );
+
+    warn.mockRestore();
   });
 });
