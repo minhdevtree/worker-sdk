@@ -7,5 +7,9 @@ module.exports = {
   async createClient(configPath) {
     const mod = await import('./client/client.js');
     return mod.createClient(configPath);
+  },
+  async createDashboard(configPath) {
+    const mod = await import('./dashboard/standalone.js');
+    return mod.createDashboard(configPath);
   }
 };
