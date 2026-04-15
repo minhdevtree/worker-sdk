@@ -35,8 +35,15 @@ redis:
   tls: ${REDIS_TLS:-}
 
 logging:
-  dir: ./logs             # structured JSON log files (one per day)
-  retentionDays: 30       # auto-delete old files on startup
+  dir: ./logs                        # local file buffer (short retention)
+  retentionDays: 7
+  loki:                              # optional — ship to Loki for long-term search
+    url: ${LOKI_URL:-}
+    batchSize: 100
+    flushInterval: 5000
+    labels:
+      app: my-app
+      env: production
 
 dashboard:
   port: 3800
@@ -119,6 +126,20 @@ await client.add('processOrder', {orderId: 42});
 
 The client is lightweight — only creates BullMQ Queue instances on demand. Safe to import anywhere in your app backend.
 
+### 5. Run dashboard as a separate service (recommended)
+
+```js
+// dashboard.mjs
+import {createDashboard} from '@minhdevtree/worker-sdk';
+
+const dashboard = createDashboard('./worker.config.yml');
+await dashboard.start();
+```
+
+Run it: `node dashboard.mjs`
+
+Running the dashboard as its own process means it stays up even when workers restart, and a single dashboard can serve any number of workers (they all share Redis).
+
 ## Tiers
 
 Jobs are grouped by resource weight. Each tier maps to a separate BullMQ Worker with its own concurrency limit:
@@ -180,7 +201,7 @@ Each line is a JSON object:
 
 Both `context.logger.info/warn/error` and captured `console.log/warn/error` are written.
 
-Logs are kept for `retentionDays` (default 30). Old files are auto-deleted on worker startup.
+Local files act as a short-term buffer — set `retentionDays` to how many days you want to keep on disk (e.g. 7). Old files are auto-deleted on worker startup. For long-term archive, configure `logging.loki` to ship logs to Grafana Loki (see below).
 
 Search with grep:
 
@@ -227,6 +248,28 @@ The handler is registered like any other job — same `execute(payload, context)
 | `REDIS_TLS` | No | Set to `true` to enable TLS |
 
 Any field in `worker.config.yml` can be made env-driven via `${VAR_NAME:-default}` syntax.
+
+## Long-term log search with Loki
+
+This SDK configures BullMQ to retain only the last ~1000 completed jobs in Redis (`removeOnComplete`). For long-term historical search (weeks or months), configure Loki:
+
+```yaml
+logging:
+  loki:
+    url: http://loki:3100
+    batchSize: 100
+    flushInterval: 5000
+    labels:
+      app: my-app
+```
+
+The SDK will push every log entry (both `context.logger.*` and captured `console.*`) to Loki in batches. Use Grafana to search by job name, level, shop ID, date range.
+
+If `loki.url` is empty or missing, Loki shipping is disabled — the SDK falls back to file-only logging.
+
+Log retention in Loki is controlled by the Loki server's own `retention_period` config, not by the SDK.
+
+**Setup your Loki stack** — see [SETUP.md](./SETUP.md) for a Docker Compose example that runs Loki + Grafana alongside the worker.
 
 ## Migration from Firebase Pub/Sub
 
