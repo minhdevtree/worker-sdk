@@ -17,6 +17,19 @@
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/minhdevtree/worker-sdk"
+  },
+  "license": "MIT",
+  "keywords": [
+    "worker",
+    "job-queue",
+    "bullmq",
+    "redis",
+    "background-jobs",
+    "self-hosted"
+  ],
   "dependencies": {
     "bullmq": "^5.0.0",
     "@bull-board/api": "^6.0.0",
