@@ -11,5 +11,9 @@ module.exports = {
   async createDashboard(configPath) {
     const mod = await import('./dashboard/standalone.js');
     return mod.createDashboard(configPath);
+  },
+  async listWorkers(redis) {
+    const mod = await import('./admin/listWorkers.js');
+    return mod.listWorkers(redis);
   }
 };

@@ -15,15 +15,16 @@ export class LokiShipper {
    * @param {number} [options.batchSize=100]
    * @param {number} [options.flushInterval=5000]
    * @param {object} [options.labels={}] - static labels added to every stream
+   * @param {string} [options.workerId] - Optional per-worker identifier added to every stream label. Overrides any workerId in options.labels.
    * @param {number} [options.maxBufferSize=10000]
    */
-  constructor({url, batchSize = 100, flushInterval = 5000, labels = {}, maxBufferSize = 10000}) {
+  constructor({url, batchSize = 100, flushInterval = 5000, labels = {}, workerId, maxBufferSize = 10000}) {
     if (!url) throw new Error('LokiShipper requires a url');
 
     this._url = url.replace(/\/$/, '') + '/loki/api/v1/push';
     this._batchSize = batchSize;
     this._maxBufferSize = maxBufferSize;
-    this._staticLabels = labels;
+    this._staticLabels = workerId ? {...labels, workerId} : {...labels};
     this._buffer = [];
     this._flushing = false;
     this._stopped = false;

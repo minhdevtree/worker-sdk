@@ -7,10 +7,20 @@ export class CronManager {
     this._queues = new Map();
   }
 
-  async register(jobs) {
-    for (const [jobName, jobConfig] of Object.entries(jobs)) {
-      if (!jobConfig.cron) continue;
+  async register(jobs, {leader = false} = {}) {
+    const cronJobs = Object.entries(jobs).filter(([, cfg]) => cfg.cron);
 
+    if (cronJobs.length === 0) return;
+
+    if (!leader) {
+      console.warn(
+        `[worker-sdk] cron.leader=false — skipping registration of ${cronJobs.length} cron job(s). ` +
+        `One worker in the pool must set cron.leader=true to register schedules.`
+      );
+      return;
+    }
+
+    for (const [jobName, jobConfig] of cronJobs) {
       const tier = jobConfig.tier || 'medium';
       const queue = this._getQueue(tier);
 

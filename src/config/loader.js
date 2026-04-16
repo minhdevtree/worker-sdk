@@ -2,6 +2,8 @@ import {readFileSync} from 'fs';
 import yaml from 'js-yaml';
 
 const DEFAULT_CONCURRENCY = {heavy: 2, medium: 5, light: 10};
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 10000;
+const DEFAULT_HEARTBEAT_TTL_MS = 30000;
 
 /**
  * Load and parse YAML config with environment variable interpolation.
@@ -17,8 +19,13 @@ export function loadConfig(configPath) {
   config.dashboard = config.dashboard || {};
   config.jobs = config.jobs || {};
 
+  config.worker = config.worker || {};
+  config.cron = config.cron || {};
+
   normalizeRedisOptions(config.redis);
   normalizeLokiOptions(config.logging);
+  normalizeWorkerOptions(config.worker);
+  normalizeCronOptions(config.cron);
 
   // Validate Redis config exists after normalization
   if (!config.redis || (!config.redis.host && !config.redis.port)) {
@@ -100,6 +107,70 @@ function normalizeLokiOptions(logging) {
   loki.batchSize = loki.batchSize ?? 100;
   loki.flushInterval = loki.flushInterval ?? 5000;
   loki.labels = loki.labels ?? {};
+}
+
+/**
+ * Normalize worker options after env interpolation.
+ * - Apply heartbeat defaults (enabled=true, intervalMs=10000, ttlMs=30000)
+ * - Coerce intervalMs/ttlMs from string to number
+ * - Coerce enabled from string to boolean
+ * - Validate intervalMs < ttlMs (else key expires between beats)
+ */
+function normalizeWorkerOptions(worker) {
+  worker.heartbeat = worker.heartbeat || {};
+  const hb = worker.heartbeat;
+
+  // enabled: boolean coercion from string env var
+  if (hb.enabled === 'true' || hb.enabled === true) hb.enabled = true;
+  else if (hb.enabled === 'false' || hb.enabled === false) hb.enabled = false;
+  else hb.enabled = true; // default
+
+  // intervalMs
+  if (typeof hb.intervalMs === 'string') {
+    const parsed = parseInt(hb.intervalMs, 10);
+    if (Number.isNaN(parsed)) throw new Error(`Invalid worker.heartbeat.intervalMs: "${hb.intervalMs}"`);
+    hb.intervalMs = parsed;
+  }
+  hb.intervalMs = hb.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+
+  // ttlMs
+  if (typeof hb.ttlMs === 'string') {
+    const parsed = parseInt(hb.ttlMs, 10);
+    if (Number.isNaN(parsed)) throw new Error(`Invalid worker.heartbeat.ttlMs: "${hb.ttlMs}"`);
+    hb.ttlMs = parsed;
+  }
+  hb.ttlMs = hb.ttlMs ?? DEFAULT_HEARTBEAT_TTL_MS;
+
+  if (hb.intervalMs <= 0) {
+    throw new Error(
+      `worker.heartbeat.intervalMs must be > 0 (got ${hb.intervalMs}); ` +
+      'a 0 or negative interval would tight-loop or never fire'
+    );
+  }
+  if (hb.ttlMs <= 0) {
+    throw new Error(
+      `worker.heartbeat.ttlMs must be > 0 (got ${hb.ttlMs}); ` +
+      'a 0 or negative TTL would expire the key immediately'
+    );
+  }
+
+  if (hb.intervalMs >= hb.ttlMs) {
+    throw new Error(
+      `worker.heartbeat.intervalMs (${hb.intervalMs}) must be less than ttlMs (${hb.ttlMs}); ` +
+      'otherwise the heartbeat key expires between beats'
+    );
+  }
+}
+
+/**
+ * Normalize cron options after env interpolation.
+ * - Coerce leader from string to boolean; default false
+ */
+function normalizeCronOptions(cron) {
+  // Strict: only "true" / true become true. Any other value (including typos
+  // like "yes" / "1") becomes false — be explicit in your config.
+  if (cron.leader === 'true' || cron.leader === true) cron.leader = true;
+  else cron.leader = false;
 }
 
 /**

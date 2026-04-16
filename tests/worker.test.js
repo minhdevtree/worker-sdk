@@ -124,4 +124,118 @@ jobs:
 
     warn.mockRestore();
   });
+
+  it('should auto-generate workerId from hostname and pid when worker.id is empty', async () => {
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  id:
+concurrency:
+  heavy: 1
+  medium: 2
+  light: 3
+jobs:
+  testJob:
+    tier: medium
+    timeout: 5000
+`);
+    const worker = createWorker(configPath);
+    worker.register('testJob', vi.fn());
+    await worker.start();
+
+    const os = await import('os');
+    const expected = `${os.hostname()}-${process.pid}`;
+    expect(worker.workerId).toBe(expected);
+
+    await worker.stop();
+  });
+
+  it('should use config.worker.id when set', async () => {
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  id: custom-worker-123
+concurrency:
+  heavy: 1
+  medium: 2
+  light: 3
+jobs:
+  testJob:
+    tier: medium
+    timeout: 5000
+`);
+    const worker = createWorker(configPath);
+    worker.register('testJob', vi.fn());
+    await worker.start();
+    expect(worker.workerId).toBe('custom-worker-123');
+    await worker.stop();
+  });
+
+  it('should register heartbeat as first shutdown handler when enabled', async () => {
+    const {ShutdownManager} = await import('../src/shutdown/shutdownManager.js');
+    const registerSpy = vi.spyOn(ShutdownManager.prototype, 'register');
+
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  id: w-hb
+concurrency:
+  heavy: 1
+  medium: 2
+  light: 3
+jobs:
+  testJob:
+    tier: medium
+    timeout: 5000
+`);
+    const worker = createWorker(configPath);
+    worker.register('testJob', vi.fn());
+    await worker.start();
+
+    const names = registerSpy.mock.calls.map(c => c[0]);
+    expect(names[0]).toBe('heartbeat');
+    expect(names.indexOf('heartbeat')).toBeLessThan(names.indexOf('tierManager'));
+
+    registerSpy.mockRestore();
+    await worker.stop();
+  });
+
+  it('should skip heartbeat when worker.heartbeat.enabled is false', async () => {
+    const {ShutdownManager} = await import('../src/shutdown/shutdownManager.js');
+    const registerSpy = vi.spyOn(ShutdownManager.prototype, 'register');
+
+    writeFileSync(configPath, `
+redis:
+  host: 127.0.0.1
+  port: 6379
+worker:
+  id: w-no-hb
+  heartbeat:
+    enabled: false
+concurrency:
+  heavy: 1
+  medium: 2
+  light: 3
+jobs:
+  testJob:
+    tier: medium
+    timeout: 5000
+`);
+    const worker = createWorker(configPath);
+    worker.register('testJob', vi.fn());
+    await worker.start();
+
+    const names = registerSpy.mock.calls.map(c => c[0]);
+    expect(names).not.toContain('heartbeat');
+
+    expect(worker.workerId).toBe('w-no-hb');
+    registerSpy.mockRestore();
+    await worker.stop();
+  });
 });

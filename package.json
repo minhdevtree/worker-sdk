@@ -1,6 +1,6 @@
 {
   "name": "@minhdevtree/worker-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Self-hosted background job runner powered by BullMQ + Redis",
   "type": "module",
   "main": "src/index.cjs",

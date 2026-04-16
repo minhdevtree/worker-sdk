@@ -59,6 +59,8 @@ concurrency:
   heavy: 1
   medium: 3
   light: 5
+cron:
+  leader: true
 jobs:
   processOrder:
     tier: heavy
