@@ -313,6 +313,41 @@ const workers = await listWorkers(redis);
 // → [{workerId, hostname, pid, tiers, startedAt, lastBeat}, ...]
 ```
 
+### Health checks
+
+Four admin helpers for monitoring cluster state:
+
+```js
+import {
+  pingRedis,
+  getQueueDepths,
+  checkDashboard,
+  getClusterHealth
+} from '@minhdevtree/worker-sdk';
+
+// Redis PING + latency
+await pingRedis(redis);
+// → {ok: true, latencyMs: 3}
+
+// Per-tier queue depth (waiting/active/delayed/completed/failed/paused + total)
+await getQueueDepths(redis, ['heavy', 'medium', 'light']);
+// → {heavy: {waiting: 2, active: 1, ..., total: 3}, ...}
+
+// Dashboard /health endpoint probe (no auth)
+await checkDashboard('http://host:3800');
+// → {ok: true, latencyMs: 12, status: 200, uptime: 1234, timestamp: '...'}
+
+// One-shot aggregate: runs all probes in parallel
+await getClusterHealth({
+  redis,
+  tiers: ['heavy', 'medium', 'light'],   // optional
+  dashboardUrl: 'http://host:3800'       // optional
+});
+// → {ok: true, checkedAt, redis, workers: {count, items}, queues: {byTier}, dashboard}
+```
+
+`getClusterHealth` doesn't short-circuit — a failure in one probe reports `ok: false` for that section but still returns the others. Top-level `ok` is true only if every probed section is ok.
+
 ### Scheduled jobs: the cron leader
 
 ```yaml
