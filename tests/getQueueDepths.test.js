@@ -32,6 +32,7 @@ describe('getQueueDepths', () => {
     });
     const result = await getQueueDepths({}, ['heavy', 'medium']);
     expect(Object.keys(result)).toEqual(['heavy', 'medium']);
+    expect(result.heavy.ok).toBe(true);
     expect(result.heavy.waiting).toBe(1);
     expect(result.heavy.total).toBe(3);
     expect(queueInstances).toHaveLength(2);
@@ -39,10 +40,41 @@ describe('getQueueDepths', () => {
     expect(queueInstances[1].close).toHaveBeenCalled();
   });
 
-  it('closes queues even if getJobCounts throws', async () => {
+  it('total excludes completed and failed', async () => {
     queueInstances.length = 0;
-    getJobCountsBehavior = () => Promise.reject(new Error('redis down'));
-    await expect(getQueueDepths({}, ['heavy'])).rejects.toThrow('redis down');
+    getJobCountsBehavior = () => Promise.resolve({
+      waiting: 1, active: 2, delayed: 0, completed: 100, failed: 50, paused: 0
+    });
+    const result = await getQueueDepths({}, ['heavy']);
+    expect(result.heavy.total).toBe(3);
+    expect(result.heavy.completed).toBe(100);
+    expect(result.heavy.failed).toBe(50);
+  });
+
+  it('reports per-tier failure without losing other tiers, and closes all queues', async () => {
+    queueInstances.length = 0;
+    let call = 0;
+    getJobCountsBehavior = () => {
+      call++;
+      return call === 1
+        ? Promise.reject(new Error('redis down'))
+        : Promise.resolve({waiting: 5, active: 0, delayed: 0, completed: 0, failed: 0, paused: 0});
+    };
+    const result = await getQueueDepths({}, ['heavy', 'medium']);
+    expect(result.heavy.ok).toBe(false);
+    expect(result.heavy.error).toBe('redis down');
+    expect(result.medium.ok).toBe(true);
+    expect(result.medium.waiting).toBe(5);
+    expect(queueInstances[0].close).toHaveBeenCalled();
+    expect(queueInstances[1].close).toHaveBeenCalled();
+  });
+
+  it('per-tier timeout marks the slow tier as not ok', async () => {
+    queueInstances.length = 0;
+    getJobCountsBehavior = () => new Promise(() => {});
+    const result = await getQueueDepths({}, ['heavy'], {timeoutMs: 20});
+    expect(result.heavy.ok).toBe(false);
+    expect(result.heavy.error).toMatch(/timeout after 20ms/);
     expect(queueInstances[0].close).toHaveBeenCalled();
   });
 });

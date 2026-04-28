@@ -330,8 +330,9 @@ await pingRedis(redis);
 // → {ok: true, latencyMs: 3}
 
 // Per-tier queue depth (waiting/active/delayed/completed/failed/paused + total)
+// Each tier reports its own ok flag — a per-tier failure doesn't abort the others.
 await getQueueDepths(redis, ['heavy', 'medium', 'light']);
-// → {heavy: {waiting: 2, active: 1, ..., total: 3}, ...}
+// → {heavy: {ok: true, waiting: 2, active: 1, ..., total: 3}, ...}
 
 // Dashboard /health endpoint probe (no auth)
 await checkDashboard('http://host:3800');
@@ -341,12 +342,21 @@ await checkDashboard('http://host:3800');
 await getClusterHealth({
   redis,
   tiers: ['heavy', 'medium', 'light'],   // optional
-  dashboardUrl: 'http://host:3800'       // optional
+  dashboardUrl: 'http://host:3800',      // optional
+  timeouts: {                            // optional — defaults shown
+    redisMs: 2000,
+    workersMs: 5000,
+    queuesMs: 5000,
+    dashboardMs: 3000
+  }
 });
-// → {ok: true, checkedAt, redis, workers: {count, items}, queues: {byTier}, dashboard}
+// → {ok, status: 'healthy'|'degraded'|'unhealthy', checkedAt, redis,
+//    workers: {count, items}, queues: {byTier}, dashboard}
 ```
 
-`getClusterHealth` doesn't short-circuit — a failure in one probe reports `ok: false` for that section but still returns the others. Top-level `ok` is true only if every probed section is ok.
+`getClusterHealth` doesn't short-circuit — a failure in one probe reports `ok: false` for that section but still returns the others. Top-level `ok` is true only if every probed section is ok. The `status` field classifies the rollup: `healthy` (everything ok), `unhealthy` (Redis itself is down — the critical dependency), or `degraded` (Redis ok but at least one other section failed).
+
+`checkDashboard` validates that `baseUrl` parses and uses `http:` or `https:`, sets `redirect: 'manual'`, and rejects responses larger than 64 KiB. These are basic SSRF guards — if you wire `baseUrl` to user input, add your own allow-list on top.
 
 ### Scheduled jobs: the cron leader
 

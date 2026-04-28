@@ -20,9 +20,9 @@ module.exports = {
     const mod = await import('./admin/pingRedis.js');
     return mod.pingRedis(redis, options);
   },
-  async getQueueDepths(connection, tiers) {
+  async getQueueDepths(connection, tiers, options) {
     const mod = await import('./admin/getQueueDepths.js');
-    return mod.getQueueDepths(connection, tiers);
+    return mod.getQueueDepths(connection, tiers, options);
   },
   async checkDashboard(baseUrl, options) {
     const mod = await import('./admin/checkDashboard.js');

@@ -1,12 +1,18 @@
 /**
  * Ping Redis and measure round-trip latency.
  *
+ * Never throws on transient failures (timeout, connection error, unexpected
+ * reply) — returns a structured `{ok: false, error}` instead.
+ *
  * @param {object} redis - ioredis client
  * @param {object} [options]
  * @param {number} [options.timeoutMs=2000] - Reject if PING doesn't return in time
  * @returns {Promise<{ok: boolean, latencyMs: number, error?: string}>}
  */
 export async function pingRedis(redis, {timeoutMs = 2000} = {}) {
+  if (!redis || typeof redis.ping !== 'function') {
+    return {ok: false, latencyMs: 0, error: 'redis client is required'};
+  }
   const start = Date.now();
   try {
     const result = await withTimeout(redis.ping(), timeoutMs);
@@ -21,10 +27,10 @@ export async function pingRedis(redis, {timeoutMs = 2000} = {}) {
 }
 
 function withTimeout(promise, ms) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms).unref?.()
-    )
-  ]);
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

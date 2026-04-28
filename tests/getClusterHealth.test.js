@@ -2,8 +2,9 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest';
 
 vi.mock('bullmq', () => ({
   Queue: class {
-    constructor(name) {
+    constructor(name, opts) {
       this.name = name;
+      this.opts = opts;
       this.getJobCounts = vi.fn().mockResolvedValue({
         waiting: 0, active: 0, delayed: 0, completed: 0, failed: 0, paused: 0
       });
@@ -22,6 +23,15 @@ function makeRedis({pong = 'PONG', workers = []} = {}) {
   };
 }
 
+function mockResponse({ok = true, status = 200, body = {}} = {}) {
+  return {
+    ok,
+    status,
+    headers: {get: () => null},
+    json: async () => body
+  };
+}
+
 describe('getClusterHealth', () => {
   const originalFetch = globalThis.fetch;
   beforeEach(() => {
@@ -35,12 +45,13 @@ describe('getClusterHealth', () => {
     await expect(getClusterHealth({})).rejects.toThrow(/redis.*required/);
   });
 
-  it('aggregates redis + workers when tiers/dashboard are omitted', async () => {
+  it('aggregates redis + workers when tiers/dashboard are omitted, status=healthy', async () => {
     const redis = makeRedis({
       workers: [{workerId: 'w0', hostname: 'h', pid: 1, tiers: {}, startedAt: 0, lastBeat: 0}]
     });
     const result = await getClusterHealth({redis});
     expect(result.ok).toBe(true);
+    expect(result.status).toBe('healthy');
     expect(result.redis.ok).toBe(true);
     expect(result.workers.count).toBe(1);
     expect(result.queues).toBeUndefined();
@@ -53,27 +64,27 @@ describe('getClusterHealth', () => {
     const result = await getClusterHealth({redis, tiers: ['heavy']});
     expect(result.queues.ok).toBe(true);
     expect(result.queues.byTier.heavy).toBeDefined();
+    expect(result.queues.byTier.heavy.ok).toBe(true);
   });
 
   it('includes dashboard probe when url is provided', async () => {
-    globalThis.fetch.mockResolvedValue({
-      ok: true, status: 200, json: async () => ({uptime: 10})
-    });
+    globalThis.fetch.mockResolvedValue(mockResponse({body: {uptime: 10}}));
     const redis = makeRedis();
     const result = await getClusterHealth({redis, dashboardUrl: 'http://host:3800'});
     expect(result.dashboard.ok).toBe(true);
     expect(result.dashboard.uptime).toBe(10);
   });
 
-  it('top-level ok=false if any section fails', async () => {
+  it('status=unhealthy when redis ping fails', async () => {
     const redis = makeRedis({pong: 'NOPE'});
     const result = await getClusterHealth({redis});
     expect(result.ok).toBe(false);
+    expect(result.status).toBe('unhealthy');
     expect(result.redis.ok).toBe(false);
     expect(result.workers.ok).toBe(true);
   });
 
-  it('continues when one section errors (workers failure does not block redis)', async () => {
+  it('status=degraded when workers fail but redis is up', async () => {
     const redis = {
       ping: vi.fn().mockResolvedValue('PONG'),
       scan: vi.fn().mockRejectedValue(new Error('scan down')),
@@ -84,5 +95,15 @@ describe('getClusterHealth', () => {
     expect(result.workers.ok).toBe(false);
     expect(result.workers.error).toBe('scan down');
     expect(result.ok).toBe(false);
+    expect(result.status).toBe('degraded');
+  });
+
+  it('status=degraded when dashboard is unreachable but redis+workers are ok', async () => {
+    globalThis.fetch.mockRejectedValue(new Error('ECONNREFUSED'));
+    const redis = makeRedis();
+    const result = await getClusterHealth({redis, dashboardUrl: 'http://host:3800'});
+    expect(result.redis.ok).toBe(true);
+    expect(result.dashboard.ok).toBe(false);
+    expect(result.status).toBe('degraded');
   });
 });

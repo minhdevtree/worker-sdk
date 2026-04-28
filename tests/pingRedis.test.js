@@ -30,4 +30,10 @@ describe('pingRedis', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/timeout after 20ms/);
   });
+
+  it('returns clear error when redis client is missing', async () => {
+    const result = await pingRedis(undefined);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/redis client is required/);
+  });
 });
